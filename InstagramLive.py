@@ -4,10 +4,13 @@ import json
 import threading
 import time
 from InstagramAPI.exceptions import SentryBlockException
-import subprocess
+import os
+import chat_server
+from http.server import HTTPServer
+
 
 class Main:
-    
+
     def __init__(self):
         IG_NAME = input('Username: ')
         IG_PASS = getpass('Password: ')
@@ -16,20 +19,25 @@ class Main:
         self.broadcast_id = 0
         self.chat_thread = threading.Thread(target=self.chat_job, daemon=True)
         self.isRunning = True
-    
+
     def chat_job(self):
-        with open('output', 'w') as fd:
-            garbage = []
-            p = subprocess.Popen(["gnome-terminal", "--hide-menubar", "--title='Live Chat'", "--","tail", "-f", "output"])
-            while self.isRunning:
-                time.sleep(2)
-                a = self.SendRequest(f'live/{self.broadcast_id}/get_comment/', last=False)
-                try:
-                    if a['comments']:
-                        for comment in a['comments']:
-                            comment_user = (comment['user']['username'], comment['user_id'])
+        server = HTTPServer(('', 4132), chat_server.ChatServer)
+
+        while self.isRunning:
+            server.handle_request()
+            time.sleep(1)
+            a = self.SendRequest(f'live/{self.broadcast_id}/get_comment/', last=False)
+            try:
+                if a['comments']:
+                    for comment in a['comments']:
+                        try:
+                            if comment['user']['username'] == self.api.username:
+                                chatter = 'Me'
+                            else:
+                                chatter = comment['user']['username']
+                            comment_user = {'username': chatter, 'user_id': comment['user_id']}
                             timestamp = time.gmtime(comment['created_at_utc'])
-                            comment_time = time.strftime('%H:%M:%S %d/%m/%Y', timestamp)
+                            comment_time = time.strftime('%H:%M:%S', timestamp)
                             comment_text = comment['text']
                             comment_id = comment['pk']
                             chat = {
@@ -37,17 +45,18 @@ class Main:
                                 'user': comment_user,
                                 'text': comment_text,
                                 'time': comment_time
-                                }
-                            if chat not in garbage:
-                                chatter = chat['user'][0]
-                                chatter = 'Me' if chatter == self.api.username else chatter
-                                fd.write(f"[{chat['id']}]{chat['time']} {chatter}: {chat['text']}\n")
-                                fd.flush()
-                                garbage.append(chat)
-                except:
-                    pass
-            p.kill()
-            print('Comment Thread Stopped')
+                            }
+                        except Exception as e:
+                            print(e)
+
+                        if chat in chat_server.GARBAGE:
+                            pass
+                        else:
+                            chat_server.GARBAGE.append(chat)
+
+            except Exception as e:
+                pass
+        print('Comment Thread Stopped')
 
     def create_live(self, msg=''):
         data = json.dumps({
@@ -56,7 +65,7 @@ class Main:
             'preview_height': 1280,
             'preview_width': 720,
             'broadcast_message': msg
-            })
+        })
         self.api.SendRequest('live/create/', self.api.generateSignature(data))
         broadcast_id, live_url, stream_key = (self.api.LastJson['broadcast_id'], self.api.LastJson['upload_url'][:43], self.api.LastJson['upload_url'][43:])
 
@@ -75,7 +84,7 @@ class Main:
             '_uuid': self.api.uuid,
             '_csrftoken': self.api.token,
             'should_send_notifications': notify
-            })
+        })
         self.api.SendRequest(f'live/{self.broadcast_id}/start/', self.api.generateSignature(data))
         return True
 
@@ -85,7 +94,7 @@ class Main:
             '_uuid': self.api.uuid,
             '_csrftoken': self.api.token,
             'end_after_copyright_warning': False
-            })
+        })
 
         return self.api.SendRequest(f'live/{self.broadcast_id}/end_broadcast/', self.api.generateSignature(data))
 
@@ -98,7 +107,7 @@ class Main:
                 '_uid': self.api.username_id,
                 '_uuid': self.api.uuid,
                 '_csrftoken': self.api.token
-                })
+            })
             self.api.SendRequest(f'live/{self.broadcast_id}/add_to_post_live', self.api.generateSignature(data))
 
             if self.api.LastResponse.status_code == 200:
@@ -113,7 +122,7 @@ class Main:
             '_uid': self.api.username_id,
             '_uuid': self.api.uuid,
             '_csrftoken': self.api.token
-            })
+        })
         return self.api.SendRequest(f'live/{self.broadcast_id}/delete_post_live', self.api.generateSignature(data))
 
     def pin_comment(self, comment_id):
@@ -123,7 +132,7 @@ class Main:
             '_uid': self.api.username_id,
             '_uuid': self.api.uuid,
             '_csrftoken': self.api.token
-            })
+        })
         return self.api.SendRequest(f'live/{self.broadcast_id}/pin_comment', self.api.generateSignature(data))
 
     def unpin_comment(self, comment_id):
@@ -133,7 +142,7 @@ class Main:
             '_uid': self.api.username_id,
             '_uuid': self.api.uuid,
             '_csrftoken': self.api.token
-            })
+        })
         return self.api.SendRequest(f'live/{self.broadcast_id}/unpin_comment', self.api.generateSignature(data))
 
     def SendRequest(self, endpoint, post=None, login=False, last=True):
@@ -143,11 +152,11 @@ class Main:
                 raise Exception("Not logged in!\n")
 
             self.api.s.headers.update({'Connection': 'close',
-                                'Accept': '*/*',
-                                'Content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                                'Cookie2': '$Version=1',
-                                'Accept-Language': 'en-US',
-                                'User-Agent': self.api.USER_AGENT})
+                                       'Accept': '*/*',
+                                       'Content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                                       'Cookie2': '$Version=1',
+                                       'Accept-Language': 'en-US',
+                                       'User-Agent': self.api.USER_AGENT})
 
             while True:
                 try:
@@ -179,7 +188,7 @@ class Main:
             return self.api.LastJson
         else:
             return self.api.SendRequest(endpoint, post=None, login=False)
-    
+
     def live_info(self):
         _json = self.SendRequest(f'live/{self.broadcast_id}/info/', last=False)
         dash_url = _json['dash_playback_url']
@@ -193,7 +202,7 @@ class Main:
         print(f'[*]Dash URL: {dash_url}')
         print(f'[*]Viewer Count: {viewer_count}')
         print(f'[*]Status: {status}')
-    
+
     def send_comment(self, msg):
         data = json.dumps({
             'idempotence_token': self.api.generateUUID(True),
@@ -205,7 +214,7 @@ class Main:
         _json = self.SendRequest(f'live/{self.broadcast_id}/comment/', self.api.generateSignature(data), last=False)
         if _json['status'] == 'ok':
             return True
-    
+
     def exit(self):
         self.end_live()
         print('Save Live replay to story ? <y/n>')
@@ -218,6 +227,8 @@ class Main:
         self.isRunning = False
         self.chat_thread.join()
         print('All process Stopped')
+        time.sleep(1)
+        print('Cleaning cache...')
 
     def wave(self, userid):
 
@@ -239,7 +250,7 @@ class Main:
         for user in _json['users']:
             users.append(f"{user['username']}")
             ids.append(f"{user['pk']}")
-        
+
         return users, ids
 
     def run(self):
@@ -252,13 +263,14 @@ class Main:
             input('Press Enter after your Broadcast Software started streaming\n')
             self.start_live()
             self.chat_thread.start()
-            
-            while self.isRunning:                
+            print("Chat Server Started")
+
+            while self.isRunning:
                 cmd = input('command> ')
 
                 if cmd == 'stop':
                     self.exit()
-                
+
                 elif cmd == 'wave':
                     users, ids = self.get_viewer_list()
                     for i in range(len(users)):
@@ -278,7 +290,7 @@ class Main:
 
                 elif cmd == 'info':
                     self.live_info()
-                
+
                 elif cmd == 'viewers':
                     users, ids = self.get_viewer_list()
                     print(users)
@@ -289,7 +301,7 @@ class Main:
                         self.send_comment(to_send)
                     else:
                         print('usage: chat <text to chat>')
-                
+
                 else:
                     print('Available commands:\n\t"stop"\n\t"info"\n\t"viewers"\n\t"chat"\n\t"wave"')
 
