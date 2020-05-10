@@ -1,3 +1,5 @@
+#[DEPRECATED]
+
 # InstagramLive-Python
 This Repo is based on [mgp25's Instagram-API](https://github.com/mgp25/Instagram-API) and use [LevPasha's Instagram-API python module](https://github.com/LevPasha/Instagram-API-python)
 
